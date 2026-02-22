@@ -34,38 +34,73 @@ class UserRepository(BaseRepository[User]):
             user: Объект пользователя
 
         Returns:
-            ID созданного пользователя
+            ID созданного пользователя или None в случае ошибки
         """
         try:
-            query = """
-            INSERT INTO users 
-            (username, email, full_name, department, role, is_active, 
-             created_at, updated_at, last_login, phone, telegram_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """
+            # Получаем список колонок таблицы
+            columns = self._get_table_columns()
 
-            params = (
-                user.username,
-                user.email,
-                user.full_name,
-                user.department,
-                user.role,
-                1 if user.is_active else 0,
-                user.created_at or datetime.now(),
-                user.updated_at or datetime.now(),
-                user.last_login,
-                user.phone,
-                user.telegram_id
-            )
+            # Подготавливаем данные для вставки
+            data = {
+                'username': user.username,
+                'email': user.email,
+                'full_name': user.full_name,
+                'department': user.department,
+                'role': user.role,
+                'phone': user.phone,
+                'telegram_id': user.telegram_id
+            }
 
-            user.id = self.db.execute_insert(query, params)
-            self.logger.info(f"Создан новый пользователь: {user.username} (ID: {user.id})")
+            # Добавляем опциональные поля, если они есть в таблице
+            if 'is_active' in columns:
+                data['is_active'] = 1 if user.is_active else 0
 
-            return user.id
+            if 'created_at' in columns:
+                data['created_at'] = user.created_at or datetime.now()
+
+            if 'updated_at' in columns:
+                data['updated_at'] = user.updated_at or datetime.now()
+
+            if 'last_login' in columns and user.last_login:
+                data['last_login'] = user.last_login
+
+            # Фильтруем только существующие колонки
+            filtered_data = {k: v for k, v in data.items() if k in columns and v is not None}
+
+            if not filtered_data:
+                self.logger.error("Нет данных для вставки")
+                return None
+
+            # Формируем запрос
+            columns_str = ', '.join(filtered_data.keys())
+            placeholders = ', '.join(['?' for _ in filtered_data])
+            values = list(filtered_data.values())
+
+            query = f"INSERT INTO users ({columns_str}) VALUES ({placeholders})"
+
+            # Выполняем вставку
+            user.id = self.db.execute_insert(query, values)
+
+            if user.id:
+                self.logger.info(f"Создан новый пользователь: {user.username} (ID: {user.id})")
+                return user.id
+            else:
+                self.logger.error("Не удалось получить ID созданного пользователя")
+                return None
 
         except Exception as e:
             self.logger.error(f"Ошибка при создании пользователя: {e}")
             return None
+
+    def _get_table_columns(self) -> List[str]:
+        """Получение списка колонок таблицы users"""
+        try:
+            query = "PRAGMA table_info(users)"
+            results = self.db.execute_query(query)
+            return [row['name'] for row in results]
+        except Exception as e:
+            self.logger.error(f"Ошибка при получении списка колонок: {e}")
+            return []
 
     def update(self, user: User) -> bool:
         """
@@ -78,29 +113,48 @@ class UserRepository(BaseRepository[User]):
             True при успешном обновлении
         """
         try:
-            query = """
-            UPDATE users 
-            SET username = ?, email = ?, full_name = ?, department = ?, 
-                role = ?, is_active = ?, updated_at = ?, last_login = ?,
-                phone = ?, telegram_id = ?
-            WHERE id = ?
-            """
+            if not user.id:
+                self.logger.error("ID пользователя не указан")
+                return False
 
-            params = (
-                user.username,
-                user.email,
-                user.full_name,
-                user.department,
-                user.role,
-                1 if user.is_active else 0,
-                datetime.now(),
-                user.last_login,
-                user.phone,
-                user.telegram_id,
-                user.id
-            )
+            # Получаем список колонок
+            columns = self._get_table_columns()
 
-            affected = self.db.execute_update(query, params)
+            # Подготавливаем данные для обновления
+            data = {
+                'username': user.username,
+                'email': user.email,
+                'full_name': user.full_name,
+                'department': user.department,
+                'role': user.role,
+                'phone': user.phone,
+                'telegram_id': user.telegram_id
+            }
+
+            if 'is_active' in columns:
+                data['is_active'] = 1 if user.is_active else 0
+
+            if 'updated_at' in columns:
+                data['updated_at'] = datetime.now()
+
+            if 'last_login' in columns and user.last_login:
+                data['last_login'] = user.last_login
+
+            # Фильтруем только существующие колонки
+            filtered_data = {k: v for k, v in data.items() if k in columns and v is not None}
+
+            if not filtered_data:
+                self.logger.warning("Нет данных для обновления")
+                return False
+
+            # Формируем запрос
+            set_clause = ', '.join([f"{k} = ?" for k in filtered_data.keys()])
+            values = list(filtered_data.values())
+            values.append(user.id)
+
+            query = f"UPDATE users SET {set_clause} WHERE id = ?"
+
+            affected = self.db.execute_update(query, values)
 
             if affected > 0:
                 self.logger.info(f"Пользователь {user.username} (ID: {user.id}) обновлен")
@@ -167,7 +221,14 @@ class UserRepository(BaseRepository[User]):
             Список пользователей
         """
         try:
-            query = "SELECT * FROM users WHERE role = ? AND is_active = 1"
+            # Проверяем наличие колонки is_active
+            columns = self._get_table_columns()
+
+            if 'is_active' in columns:
+                query = "SELECT * FROM users WHERE role = ? AND is_active = 1"
+            else:
+                query = "SELECT * FROM users WHERE role = ?"
+
             results = self.db.execute_query(query, (role,))
 
             return [User.from_db_row(row) for row in results]
@@ -184,7 +245,14 @@ class UserRepository(BaseRepository[User]):
             Список исполнителей
         """
         try:
-            query = "SELECT * FROM users WHERE role IN ('executor', 'admin') AND is_active = 1"
+            # Проверяем наличие колонки is_active
+            columns = self._get_table_columns()
+
+            if 'is_active' in columns:
+                query = "SELECT * FROM users WHERE role IN ('executor', 'admin') AND is_active = 1"
+            else:
+                query = "SELECT * FROM users WHERE role IN ('executor', 'admin')"
+
             results = self.db.execute_query(query)
 
             return [User.from_db_row(row) for row in results]
@@ -201,7 +269,14 @@ class UserRepository(BaseRepository[User]):
             Список администраторов
         """
         try:
-            query = "SELECT * FROM users WHERE role = 'admin' AND is_active = 1"
+            # Проверяем наличие колонки is_active
+            columns = self._get_table_columns()
+
+            if 'is_active' in columns:
+                query = "SELECT * FROM users WHERE role = 'admin' AND is_active = 1"
+            else:
+                query = "SELECT * FROM users WHERE role = 'admin'"
+
             results = self.db.execute_query(query)
 
             return [User.from_db_row(row) for row in results]
@@ -218,8 +293,15 @@ class UserRepository(BaseRepository[User]):
             Список активных пользователей
         """
         try:
-            query = "SELECT * FROM users WHERE is_active = 1"
-            results = self.db.execute_query(query)
+            # Проверяем наличие колонки is_active
+            columns = self._get_table_columns()
+
+            if 'is_active' in columns:
+                query = "SELECT * FROM users WHERE is_active = 1"
+                results = self.db.execute_query(query)
+            else:
+                # Если нет колонки is_active, возвращаем всех
+                results = self.db.execute_query("SELECT * FROM users")
 
             return [User.from_db_row(row) for row in results]
 
@@ -238,7 +320,14 @@ class UserRepository(BaseRepository[User]):
             Список пользователей
         """
         try:
-            query = "SELECT * FROM users WHERE department = ? AND is_active = 1"
+            # Проверяем наличие колонки is_active
+            columns = self._get_table_columns()
+
+            if 'is_active' in columns:
+                query = "SELECT * FROM users WHERE department = ? AND is_active = 1"
+            else:
+                query = "SELECT * FROM users WHERE department = ?"
+
             results = self.db.execute_query(query, (department,))
 
             return [User.from_db_row(row) for row in results]
@@ -258,13 +347,25 @@ class UserRepository(BaseRepository[User]):
             Список найденных пользователей
         """
         try:
-            query = """
-            SELECT * FROM users 
-            WHERE (username LIKE ? OR full_name LIKE ? OR email LIKE ?)
-            AND is_active = 1
-            LIMIT 20
-            """
             search_term = f"%{term}%"
+
+            # Проверяем наличие колонки is_active
+            columns = self._get_table_columns()
+
+            if 'is_active' in columns:
+                query = """
+                SELECT * FROM users 
+                WHERE (username LIKE ? OR full_name LIKE ? OR email LIKE ?)
+                AND is_active = 1
+                LIMIT 20
+                """
+            else:
+                query = """
+                SELECT * FROM users 
+                WHERE (username LIKE ? OR full_name LIKE ? OR email LIKE ?)
+                LIMIT 20
+                """
+
             results = self.db.execute_query(query, (search_term, search_term, search_term))
 
             return [User.from_db_row(row) for row in results]
@@ -287,13 +388,19 @@ class UserRepository(BaseRepository[User]):
             # По ролям
             roles = {}
             for role in ['requester', 'executor', 'admin']:
-                count = self.count({'role': role})
+                count = len(self.find_by_role(role))
                 if count > 0:
                     roles[role] = count
 
-            # Активные/неактивные
-            active = self.count({'is_active': 1})
-            inactive = total - active
+            # Проверяем наличие колонки is_active
+            columns = self._get_table_columns()
+
+            if 'is_active' in columns:
+                active = self.count({'is_active': 1})
+                inactive = total - active
+            else:
+                active = total
+                inactive = 0
 
             return {
                 'total': total,

@@ -31,11 +31,11 @@ class StatisticsService:
         self.sla_service = SLAService()
         self.logger = logging.getLogger(__name__)
 
-    # ==================== ОСНОВНЫЕ ОТЧЕТЫ ====================
+    # ==================== ОСНОВНЫЕ МЕТОДЫ СТАТИСТИКИ ====================
 
-    def get_dashboard_stats(self, days: int = 30) -> Dict[str, Any]:
+    def get_statistics(self, days: int = 30) -> Dict[str, Any]:
         """
-        Получение статистики для дашборда.
+        Получение общей статистики за период.
 
         Args:
             days: Период в днях
@@ -43,105 +43,272 @@ class StatisticsService:
         Returns:
             Словарь со статистикой
         """
-        since_date = datetime.now() - timedelta(days=days)
-        requests = self.request_repo.find_since(since_date)
+        try:
+            since_date = datetime.now() - timedelta(days=days)
+            requests = self.request_repo.find_since(since_date)
 
-        stats = {
-            'period': f"последние {days} дней",
-            'total_requests': len(requests),
-            'by_status': self._group_by_status(requests),
-            'by_priority': self._group_by_priority(requests),
-            'by_category': self._group_by_category(requests),
-            'daily_stats': self._get_daily_stats(requests, days),
-            'sla_stats': self.sla_service.get_sla_summary(requests),
-            'performance': self._get_performance_stats(requests),
-            'trends': self._get_trends(requests)
-        }
+            # Базовая статистика
+            total = len(requests)
+            resolved = len([r for r in requests if r.resolved_at])
+            open_requests = total - resolved
 
-        return stats
+            # Статистика по статусам
+            by_status = self._group_by_status(requests)
 
-    def get_performance_report(self, period_days: int = 30) -> Dict[str, Any]:
+            # Статистика по приоритетам
+            by_priority = self._group_by_priority(requests)
+
+            # Статистика по категориям
+            by_category = self._group_by_category(requests)
+
+            # Статистика SLA
+            sla_stats = self.sla_service.get_sla_summary(requests)
+
+            # Среднее время решения
+            avg_resolution = self._calculate_avg_resolution_time(requests)
+
+            # Ежедневная статистика
+            daily_stats = self._get_daily_stats(requests, days)
+
+            # Тренды
+            trends = self._get_trends(requests)
+
+            return {
+                'period_days': days,
+                'total_requests': total,
+                'resolved_requests': resolved,
+                'open_requests': open_requests,
+                'resolution_rate': round((resolved / total * 100) if total > 0 else 0, 2),
+                'by_status': by_status,
+                'by_priority': by_priority,
+                'by_category': by_category,
+                'sla_stats': sla_stats,
+                'avg_resolution_hours': round(avg_resolution, 2),
+                'daily_stats': daily_stats,
+                'trends': trends
+            }
+
+        except Exception as e:
+            self.logger.error(f"Ошибка при получении статистики: {e}")
+            return {}
+
+    def get_detailed_statistics(self, days: int = 30) -> Dict[str, Any]:
         """
-        Отчет по эффективности работы.
+        Получение детальной статистики за период.
 
         Args:
-            period_days: Период в днях
-
-        Returns:
-            Словарь с показателями эффективности
-        """
-        since_date = datetime.now() - timedelta(days=period_days)
-        requests = self.request_repo.find_resolved_since(since_date)
-
-        report = {
-            'period_days': period_days,
-            'resolved_count': len(requests),
-            'avg_resolution_time': self._calculate_avg_resolution_time(requests),
-            'resolution_by_priority': self._resolution_time_by_priority(requests),
-            'executor_performance': self._get_executor_performance(period_days),
-            'sla_compliance': self.sla_service.get_sla_summary(requests),
-            'customer_satisfaction': self._get_satisfaction_stats(requests)
-        }
-
-        return report
-
-    def get_user_activity_report(self, user_id: Optional[int] = None,
-                                 days: int = 30) -> Dict[str, Any]:
-        """
-        Отчет по активности пользователей.
-
-        Args:
-            user_id: ID пользователя (если None - по всем)
             days: Период в днях
 
         Returns:
-            Словарь с активностью пользователей
+            Детальная статистика
         """
-        since_date = datetime.now() - timedelta(days=days)
+        try:
+            since_date = datetime.now() - timedelta(days=days)
+            requests = self.request_repo.find_since(since_date)
 
-        if user_id:
-            # Статистика конкретного пользователя
+            return {
+                'period_days': days,
+                'total_requests': len(requests),
+                'by_status_detail': self._get_status_detail(requests),
+                'by_priority_detail': self._get_priority_detail(requests),
+                'by_category_detail': self._get_category_detail(requests),
+                'by_user_detail': self._get_user_detail(requests),
+                'resolution_time_distribution': self._get_resolution_distribution(requests),
+                'sla_compliance_detail': self._get_sla_detail(requests),
+                'hourly_distribution': self._get_hourly_distribution(requests),
+                'weekly_distribution': self._get_weekly_distribution(requests)
+            }
+
+        except Exception as e:
+            self.logger.error(f"Ошибка при получении детальной статистики: {e}")
+            return {}
+
+    def get_comparative_statistics(self, days1: int = 30, days2: int = 7) -> Dict[str, Any]:
+        """
+        Сравнительная статистика за два периода.
+
+        Args:
+            days1: Первый период (например, 30 дней)
+            days2: Второй период (например, 7 дней)
+
+        Returns:
+            Сравнительная статистика
+        """
+        try:
+            stats1 = self.get_statistics(days1)
+            stats2 = self.get_statistics(days2)
+
+            # Вычисляем изменения
+            changes = {}
+
+            if stats1 and stats2:
+                changes = {
+                    'total_requests_change': self._calculate_change(
+                        stats1.get('total_requests', 0),
+                        stats2.get('total_requests', 0)
+                    ),
+                    'resolution_rate_change': self._calculate_change(
+                        stats1.get('resolution_rate', 0),
+                        stats2.get('resolution_rate', 0)
+                    ),
+                    'avg_resolution_change': self._calculate_change(
+                        stats1.get('avg_resolution_hours', 0),
+                        stats2.get('avg_resolution_hours', 0)
+                    )
+                }
+
+            return {
+                'period1': {'days': days1, 'stats': stats1},
+                'period2': {'days': days2, 'stats': stats2},
+                'changes': changes
+            }
+
+        except Exception as e:
+            self.logger.error(f"Ошибка при получении сравнительной статистики: {e}")
+            return {}
+
+    # ==================== МЕТОДЫ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ====================
+
+    def get_user_statistics(self, user_id: int, days: int = 30) -> Dict[str, Any]:
+        """
+        Получение статистики по конкретному пользователю.
+
+        Args:
+            user_id: ID пользователя
+            days: Период в днях
+
+        Returns:
+            Статистика пользователя
+        """
+        try:
             user = self.user_repo.find_by_id(user_id)
             if not user:
                 return {}
 
+            since_date = datetime.now() - timedelta(days=days)
+
             if user.is_requester():
+                # Статистика заявителя
                 requests = self.request_repo.find_by_requester_since(user_id, since_date)
-                stats = {
-                    'user': user.full_name,
-                    'role': user.get_role_display(),
+
+                return {
+                    'user_id': user_id,
+                    'user_name': user.full_name,
+                    'role': 'requester',
+                    'period_days': days,
                     'requests_created': len(requests),
                     'by_status': self._group_by_status(requests),
-                    'avg_creation_rate': self._calculate_creation_rate(requests, days)
+                    'by_priority': self._group_by_priority(requests),
+                    'resolved_count': len([r for r in requests if r.resolved_at]),
+                    'avg_resolution_hours': self._calculate_avg_resolution_time(requests),
+                    'sla_stats': self.sla_service.get_sla_summary(requests)
                 }
+
             elif user.is_executor():
+                # Статистика исполнителя
                 assigned = self.request_repo.find_by_assignee_since(user_id, since_date)
-                resolved = self.request_repo.find_resolved_by_assignee_since(user_id, since_date)
+                resolved = [r for r in assigned if r.resolved_at]
 
-                stats = {
-                    'user': user.full_name,
-                    'role': user.get_role_display(),
-                    'assigned': len(assigned),
-                    'resolved': len(resolved),
-                    'resolution_rate': (len(resolved) / len(assigned) * 100) if assigned else 0,
-                    'avg_resolution_time': self._calculate_avg_resolution_time(resolved),
-                    'by_status': self._group_by_status(assigned)
+                resolution_times = []
+                for r in resolved:
+                    if r.resolved_at and r.created_at:
+                        hours = (r.resolved_at - r.created_at).total_seconds() / 3600
+                        resolution_times.append(hours)
+
+                return {
+                    'user_id': user_id,
+                    'user_name': user.full_name,
+                    'role': 'executor',
+                    'period_days': days,
+                    'assigned_count': len(assigned),
+                    'resolved_count': len(resolved),
+                    'resolution_rate': round((len(resolved) / len(assigned) * 100) if assigned else 0, 2),
+                    'by_status': self._group_by_status(assigned),
+                    'by_priority': self._group_by_priority(assigned),
+                    'avg_resolution_hours': round(sum(resolution_times) / len(resolution_times) if resolution_times else 0, 2),
+                    'sla_stats': self.sla_service.get_sla_summary(assigned)
                 }
-            else:
-                stats = {'user': user.full_name, 'role': 'Администратор'}
 
-            return stats
-        else:
-            # Статистика по всем пользователям
-            users = self.user_repo.find_all()
+            return {}
+
+        except Exception as e:
+            self.logger.error(f"Ошибка при получении статистики пользователя {user_id}: {e}")
+            return {}
+
+    def get_top_performers(self, limit: int = 5, days: int = 30) -> Dict[str, List]:
+        """
+        Получение топ исполнителей.
+
+        Args:
+            limit: Количество в топе
+            days: Период
+
+        Returns:
+            Словарь с топами
+        """
+        try:
+            executors = self.user_repo.find_executors()
+            since_date = datetime.now() - timedelta(days=days)
+
+            performer_stats = []
+
+            for executor in executors:
+                assigned = self.request_repo.find_by_assignee_since(executor.id, since_date)
+                resolved = [r for r in assigned if r.resolved_at]
+
+                if assigned:
+                    resolution_rate = (len(resolved) / len(assigned)) * 100
+
+                    # Среднее время решения
+                    resolution_times = []
+                    for r in resolved:
+                        if r.resolved_at and r.created_at:
+                            hours = (r.resolved_at - r.created_at).total_seconds() / 3600
+                            resolution_times.append(hours)
+
+                    avg_time = sum(resolution_times) / len(resolution_times) if resolution_times else 0
+
+                    # SLA compliance
+                    sla_compliant = 0
+                    for r in resolved:
+                        if self.sla_service.check_sla_compliance(r):
+                            sla_compliant += 1
+
+                    sla_rate = (sla_compliant / len(resolved) * 100) if resolved else 0
+
+                    performer_stats.append({
+                        'id': executor.id,
+                        'name': executor.full_name,
+                        'assigned': len(assigned),
+                        'resolved': len(resolved),
+                        'resolution_rate': round(resolution_rate, 2),
+                        'avg_resolution_hours': round(avg_time, 2),
+                        'sla_compliance_rate': round(sla_rate, 2)
+                    })
+
+            # Сортируем по количеству решенных заявок
+            top_by_resolved = sorted(performer_stats,
+                                    key=lambda x: x['resolved'],
+                                    reverse=True)[:limit]
+
+            # Сортируем по скорости решения
+            top_by_speed = sorted([p for p in performer_stats if p['resolved'] > 0],
+                                 key=lambda x: x['avg_resolution_hours'])[:limit]
+
+            # Сортируем по SLA compliance
+            top_by_sla = sorted([p for p in performer_stats if p['resolved'] > 0],
+                               key=lambda x: x['sla_compliance_rate'],
+                               reverse=True)[:limit]
 
             return {
-                'total_users': len(users),
-                'by_role': self._count_users_by_role(users),
-                'active_users': self._get_active_users_count(days),
-                'top_creators': self._get_top_creators(days, limit=5),
-                'top_executors': self._get_top_executors(days, limit=5)
+                'by_resolved': top_by_resolved,
+                'by_speed': top_by_speed,
+                'by_sla': top_by_sla
             }
+
+        except Exception as e:
+            self.logger.error(f"Ошибка при получении топ исполнителей: {e}")
+            return {}
 
     # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
 
@@ -198,75 +365,6 @@ class StatisticsService:
 
         return sorted(result, key=lambda x: x['date'])
 
-    def _get_performance_stats(self, requests: List[Request]) -> Dict[str, Any]:
-        """Получение статистики производительности"""
-        resolved = [r for r in requests if r.resolved_at]
-
-        if not resolved:
-            return {
-                'avg_resolution_hours': 0,
-                'fastest_resolution': 0,
-                'slowest_resolution': 0
-            }
-
-        resolution_times = []
-        for r in resolved:
-            if r.created_at and r.resolved_at:
-                hours = (r.resolved_at - r.created_at).total_seconds() / 3600
-                resolution_times.append(hours)
-
-        return {
-            'avg_resolution_hours': sum(resolution_times) / len(resolution_times) if resolution_times else 0,
-            'fastest_resolution': min(resolution_times) if resolution_times else 0,
-            'slowest_resolution': max(resolution_times) if resolution_times else 0
-        }
-
-    def _get_trends(self, requests: List[Request]) -> Dict[str, Any]:
-        """Анализ тенденций"""
-        if len(requests) < 10:
-            return {'message': 'Недостаточно данных для анализа тенденций'}
-
-        # Разделяем на две половины по времени
-        sorted_reqs = sorted(requests, key=lambda x: x.created_at or datetime.min)
-        mid = len(sorted_reqs) // 2
-
-        first_half = sorted_reqs[:mid]
-        second_half = sorted_reqs[mid:]
-
-        trends = {
-            'volume_trend': 'increasing' if len(second_half) > len(first_half) else 'decreasing',
-            'resolution_time_trend': self._compare_resolution_times(first_half, second_half),
-            'sla_trend': self._compare_sla_compliance(first_half, second_half)
-        }
-
-        return trends
-
-    def _compare_resolution_times(self, first: List[Request],
-                                  second: List[Request]) -> str:
-        """Сравнение времени решения"""
-        first_avg = self._calculate_avg_resolution_time(first)
-        second_avg = self._calculate_avg_resolution_time(second)
-
-        if second_avg < first_avg * 0.9:
-            return 'improving'
-        elif second_avg > first_avg * 1.1:
-            return 'worsening'
-        else:
-            return 'stable'
-
-    def _compare_sla_compliance(self, first: List[Request],
-                                second: List[Request]) -> str:
-        """Сравнение соблюдения SLA"""
-        first_compliance = self.sla_service.get_sla_summary(first)['compliance_rate']
-        second_compliance = self.sla_service.get_sla_summary(second)['compliance_rate']
-
-        if second_compliance > first_compliance + 5:
-            return 'improving'
-        elif second_compliance < first_compliance - 5:
-            return 'worsening'
-        else:
-            return 'stable'
-
     def _calculate_avg_resolution_time(self, requests: List[Request]) -> float:
         """Расчет среднего времени решения"""
         resolved = [r for r in requests if r.resolved_at and r.created_at]
@@ -281,123 +379,253 @@ class StatisticsService:
 
         return total / len(resolved)
 
-    def _resolution_time_by_priority(self, requests: List[Request]) -> Dict[str, float]:
-        """Время решения по приоритетам"""
-        by_priority = defaultdict(list)
+    def _get_trends(self, requests: List[Request]) -> Dict[str, Any]:
+        """Анализ тенденций"""
+        if len(requests) < 10:
+            return {'message': 'Недостаточно данных для анализа тенденций'}
 
-        for r in requests:
-            if r.resolved_at and r.created_at:
-                hours = (r.resolved_at - r.created_at).total_seconds() / 3600
-                by_priority[r.priority].append(hours)
+        # Сортируем по дате создания
+        sorted_reqs = sorted([r for r in requests if r.created_at],
+                            key=lambda x: x.created_at)
 
-        result = {}
-        for priority, times in by_priority.items():
-            if times:
-                result[priority] = sum(times) / len(times)
+        if len(sorted_reqs) < 2:
+            return {'message': 'Недостаточно данных для анализа'}
 
-        return result
+        mid = len(sorted_reqs) // 2
+        first_half = sorted_reqs[:mid]
+        second_half = sorted_reqs[mid:]
 
-    def _get_executor_performance(self, days: int) -> List[Dict]:
-        """Производительность исполнителей"""
-        executors = self.user_repo.find_executors()
-        result = []
+        # Тренд количества
+        volume_trend = self._get_volume_trend(first_half, second_half)
 
-        for executor in executors:
-            assigned = len(self.request_repo.find_by_assignee(executor.id))
-            resolved = len([r for r in self.request_repo.find_by_assignee(executor.id)
-                            if r.is_resolved()])
+        # Тренд времени решения
+        time_trend = self._get_time_trend(first_half, second_half)
 
-            result.append({
-                'id': executor.id,
-                'name': executor.full_name,
-                'assigned': assigned,
-                'resolved': resolved,
-                'resolution_rate': (resolved / assigned * 100) if assigned else 0
-            })
-
-        return sorted(result, key=lambda x: x['resolution_rate'], reverse=True)
-
-    def _get_satisfaction_stats(self, requests: List[Request]) -> Dict[str, Any]:
-        """Статистика удовлетворенности"""
-        rated = [r for r in requests if r.satisfaction_rating]
-
-        if not rated:
-            return {
-                'total_ratings': 0,
-                'avg_rating': 0,
-                'distribution': {}
-            }
-
-        distribution = defaultdict(int)
-        total = 0
-
-        for r in rated:
-            distribution[r.satisfaction_rating] += 1
-            total += r.satisfaction_rating
+        # Тренд SLA
+        sla_trend = self._get_sla_trend(first_half, second_half)
 
         return {
-            'total_ratings': len(rated),
-            'avg_rating': total / len(rated),
-            'distribution': dict(distribution)
+            'volume_trend': volume_trend,
+            'resolution_time_trend': time_trend,
+            'sla_trend': sla_trend
         }
 
-    def _count_users_by_role(self, users: List[User]) -> Dict[str, int]:
-        """Подсчет пользователей по ролям"""
-        result = {}
-        for user in users:
-            role = user.get_role_display()
-            result[role] = result.get(role, 0) + 1
-        return result
+    def _get_volume_trend(self, first: List[Request], second: List[Request]) -> str:
+        """Тренд количества заявок"""
+        if len(second) > len(first) * 1.2:
+            return 'increasing'
+        elif len(second) < len(first) * 0.8:
+            return 'decreasing'
+        else:
+            return 'stable'
 
-    def _get_active_users_count(self, days: int) -> int:
-        """Количество активных пользователей"""
-        since_date = datetime.now() - timedelta(days=days)
-        # В реальном приложении здесь запрос к истории действий
-        return 0
+    def _get_time_trend(self, first: List[Request], second: List[Request]) -> str:
+        """Тренд времени решения"""
+        first_avg = self._calculate_avg_resolution_time(first)
+        second_avg = self._calculate_avg_resolution_time(second)
 
-    def _get_top_creators(self, days: int, limit: int = 5) -> List[Dict]:
-        """Топ создателей заявок"""
-        since_date = datetime.now() - timedelta(days=days)
-        requests = self.request_repo.find_since(since_date)
+        if first_avg == 0 or second_avg == 0:
+            return 'unknown'
 
+        if second_avg < first_avg * 0.9:
+            return 'improving'
+        elif second_avg > first_avg * 1.1:
+            return 'worsening'
+        else:
+            return 'stable'
+
+    def _get_sla_trend(self, first: List[Request], second: List[Request]) -> str:
+        """Тренд соблюдения SLA"""
+        first_compliance = self.sla_service.get_sla_summary(first).get('compliance_rate', 0)
+        second_compliance = self.sla_service.get_sla_summary(second).get('compliance_rate', 0)
+
+        if second_compliance > first_compliance + 5:
+            return 'improving'
+        elif second_compliance < first_compliance - 5:
+            return 'worsening'
+        else:
+            return 'stable'
+
+    def _get_status_detail(self, requests: List[Request]) -> List[Dict]:
+        """Детальная статистика по статусам"""
+        result = []
+        for request in requests:
+            status = self.status_repo.find_by_id(request.status_id)
+            if status:
+                result.append({
+                    'status_id': status.id,
+                    'status_name': status.name,
+                    'status_code': status.code,
+                    'count': 1
+                })
+
+        # Группируем
+        from collections import Counter
+        counter = Counter()
+        for item in result:
+            counter[(item['status_id'], item['status_name'], item['status_code'])] += 1
+
+        return [
+            {
+                'status_id': sid,
+                'status_name': name,
+                'status_code': code,
+                'count': count
+            }
+            for (sid, name, code), count in counter.items()
+        ]
+
+    def _get_priority_detail(self, requests: List[Request]) -> List[Dict]:
+        """Детальная статистика по приоритетам"""
+        from collections import Counter
+        counter = Counter(r.priority for r in requests)
+
+        return [
+            {
+                'priority': priority,
+                'priority_display': Request.PRIORITY_DISPLAY.get(priority, priority),
+                'count': count
+            }
+            for priority, count in counter.items()
+        ]
+
+    def _get_category_detail(self, requests: List[Request]) -> List[Dict]:
+        """Детальная статистика по категориям"""
+        result = []
+        for request in requests:
+            category = self.category_repo.find_by_id(request.category_id)
+            if category:
+                result.append({
+                    'category_id': category.id,
+                    'category_name': category.name,
+                    'count': 1
+                })
+
+        from collections import Counter
+        counter = Counter()
+        for item in result:
+            counter[(item['category_id'], item['category_name'])] += 1
+
+        return [
+            {
+                'category_id': cid,
+                'category_name': name,
+                'count': count
+            }
+            for (cid, name), count in counter.items()
+        ]
+
+    def _get_user_detail(self, requests: List[Request]) -> Dict[str, Any]:
+        """Детальная статистика по пользователям"""
         creators = defaultdict(int)
-        for r in requests:
-            creators[r.requester_id] += 1
+        assignees = defaultdict(int)
 
-        result = []
-        for user_id, count in sorted(creators.items(), key=lambda x: x[1], reverse=True)[:limit]:
+        for request in requests:
+            if request.requester_id:
+                creators[request.requester_id] += 1
+            if request.assignee_id:
+                assignees[request.assignee_id] += 1
+
+        # Получаем имена пользователей
+        creator_details = []
+        for user_id, count in sorted(creators.items(), key=lambda x: x[1], reverse=True)[:10]:
             user = self.user_repo.find_by_id(user_id)
             if user:
-                result.append({
-                    'id': user_id,
-                    'name': user.full_name,
-                    'count': count
+                creator_details.append({
+                    'user_id': user_id,
+                    'user_name': user.full_name,
+                    'requests_created': count
                 })
 
-        return result
-
-    def _get_top_executors(self, days: int, limit: int = 5) -> List[Dict]:
-        """Топ исполнителей"""
-        since_date = datetime.now() - timedelta(days=days)
-        requests = self.request_repo.find_resolved_since(since_date)
-
-        executors = defaultdict(int)
-        for r in requests:
-            if r.assignee_id:
-                executors[r.assignee_id] += 1
-
-        result = []
-        for user_id, count in sorted(executors.items(), key=lambda x: x[1], reverse=True)[:limit]:
+        assignee_details = []
+        for user_id, count in sorted(assignees.items(), key=lambda x: x[1], reverse=True)[:10]:
             user = self.user_repo.find_by_id(user_id)
             if user:
-                result.append({
-                    'id': user_id,
-                    'name': user.full_name,
-                    'resolved': count
+                assignee_details.append({
+                    'user_id': user_id,
+                    'user_name': user.full_name,
+                    'requests_assigned': count
                 })
 
-        return result
+        return {
+            'top_creators': creator_details,
+            'top_assignees': assignee_details
+        }
 
-    def _calculate_creation_rate(self, requests: List[Request], days: int) -> float:
-        """Расчет скорости создания заявок (в день)"""
-        return len(requests) / days if days > 0 else 0
+    def _get_resolution_distribution(self, requests: List[Request]) -> Dict[str, int]:
+        """Распределение времени решения"""
+        resolved = [r for r in requests if r.resolved_at and r.created_at]
+
+        distribution = {
+            'under_1h': 0,
+            '1h_to_4h': 0,
+            '4h_to_8h': 0,
+            '8h_to_24h': 0,
+            '1d_to_3d': 0,
+            'over_3d': 0
+        }
+
+        for r in resolved:
+            hours = (r.resolved_at - r.created_at).total_seconds() / 3600
+
+            if hours < 1:
+                distribution['under_1h'] += 1
+            elif hours < 4:
+                distribution['1h_to_4h'] += 1
+            elif hours < 8:
+                distribution['4h_to_8h'] += 1
+            elif hours < 24:
+                distribution['8h_to_24h'] += 1
+            elif hours < 72:
+                distribution['1d_to_3d'] += 1
+            else:
+                distribution['over_3d'] += 1
+
+        return distribution
+
+    def _get_sla_detail(self, requests: List[Request]) -> Dict[str, Any]:
+        """Детальная статистика по SLA"""
+        total = 0
+        compliant = 0
+
+        for request in requests:
+            if request.resolved_at:
+                total += 1
+                if self.sla_service.check_sla_compliance(request):
+                    compliant += 1
+
+        return {
+            'total_resolved': total,
+            'compliant': compliant,
+            'breached': total - compliant,
+            'compliance_rate': round((compliant / total * 100) if total else 0, 2)
+        }
+
+    def _get_hourly_distribution(self, requests: List[Request]) -> Dict[int, int]:
+        """Распределение по часам создания"""
+        distribution = defaultdict(int)
+
+        for request in requests:
+            if request.created_at:
+                hour = request.created_at.hour
+                distribution[hour] += 1
+
+        return dict(sorted(distribution.items()))
+
+    def _get_weekly_distribution(self, requests: List[Request]) -> Dict[str, int]:
+        """Распределение по дням недели"""
+        days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+        distribution = {day: 0 for day in days}
+
+        for request in requests:
+            if request.created_at:
+                day_index = request.created_at.weekday()
+                distribution[days[day_index]] += 1
+
+        return distribution
+
+    def _calculate_change(self, old_value: float, new_value: float) -> float:
+        """Расчет процентного изменения"""
+        if old_value == 0:
+            return 0
+        return round(((new_value - old_value) / old_value) * 100, 2)

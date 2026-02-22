@@ -44,6 +44,7 @@ except ImportError:
 from services.request_service import RequestService
 from services.sla_service import SLAService
 from services.notification_service import NotificationService
+from services.statistics_service import StatisticsService
 from repositories.user_repository import UserRepository
 from repositories.category_repository import CategoryRepository
 from repositories.status_repository import StatusRepository
@@ -64,6 +65,7 @@ class CLIApp:
         self.request_service = RequestService()
         self.sla_service = SLAService()
         self.notification_service = NotificationService()
+        self.statistics_service = StatisticsService()  # Добавляем сервис статистики
 
         # Инициализация репозиториев
         self.user_repo = UserRepository()
@@ -1316,6 +1318,437 @@ class CLIApp:
         elif choice == '3':
             self.manage_priorities()
 
+    def manage_statuses(self):
+        """Управление статусами заявок"""
+        self.clear_screen()
+        self.print_header("УПРАВЛЕНИЕ СТАТУСАМИ")
+
+        from repositories.status_repository import StatusRepository
+        status_repo = StatusRepository()
+
+        # Получаем все статусы
+        statuses = status_repo.find_all()
+
+        if not statuses:
+            self.print_warning("Статусы не найдены")
+        else:
+            # Подготовка данных для таблицы
+            table_data = []
+            for status in statuses:
+                # Получаем количество заявок с этим статусом
+                from repositories.request_repository import RequestRepository
+                request_repo = RequestRepository()
+                requests_count = len(request_repo.find_by_status(status.id))
+
+                # Определяем тип статуса
+                status_type = []
+                if status.is_initial:
+                    status_type.append("Начальный")
+                if status.is_final:
+                    status_type.append("Конечный")
+                if status.requires_comment:
+                    status_type.append("Требует комментарий")
+
+                status_type_str = ", ".join(status_type) if status_type else "Промежуточный"
+
+                table_data.append({
+                    'id': status.id,
+                    'name': status.name,
+                    'code': status.code,
+                    'color': status.color,
+                    'type': status_type_str,
+                    'requests': requests_count,
+                    'order': status.order
+                })
+
+            headers = {
+                'id': 'ID',
+                'name': 'Название',
+                'code': 'Код',
+                'color': 'Цвет',
+                'type': 'Тип',
+                'requests': 'Заявок',
+                'order': 'Порядок'
+            }
+
+            self.print_table(table_data, headers)
+
+        print("\nДействия:")
+        print("  1. Добавить статус")
+        print("  2. Редактировать статус")
+        print("  3. Удалить статус")
+        print("  4. Настроить переходы между статусами")
+        print("  0. Назад")
+
+        choice = input("\nВаш выбор: ").strip()
+
+        if choice == '1':
+            self.add_status()
+        elif choice == '2':
+            self.edit_status()
+        elif choice == '3':
+            self.delete_status()
+        elif choice == '4':
+            self.configure_status_transitions()
+
+    def add_status(self):
+        """Добавление нового статуса"""
+        self.clear_screen()
+        self.print_header("ДОБАВЛЕНИЕ НОВОГО СТАТУСА")
+
+        from models.status import Status
+        from repositories.status_repository import StatusRepository
+        status_repo = StatusRepository()
+
+        print("Введите данные нового статуса:")
+
+        # Ввод названия
+        while True:
+            name = input("Название статуса: ").strip()
+            if not name:
+                self.print_error("Название обязательно")
+                continue
+            if len(name) < 2:
+                self.print_error("Название должно быть минимум 2 символа")
+                continue
+            break
+
+        # Ввод кода
+        while True:
+            code = input("Код статуса (латиницей, например 'in_progress'): ").strip()
+            if not code:
+                self.print_error("Код обязателен")
+                continue
+            if not code.replace('_', '').isalnum():
+                self.print_error("Код может содержать только буквы, цифры и _")
+                continue
+            # Проверка уникальности
+            existing = status_repo.find_by_code(code)
+            if existing:
+                self.print_error(f"Статус с кодом '{code}' уже существует")
+                continue
+            break
+
+        # Ввод описания
+        description = input("Описание (Enter для пропуска): ").strip()
+
+        # Ввод цвета
+        color = input("Цвет в HEX формате (например #3498db) [Enter для #3498db]: ").strip()
+        if not color:
+            color = "#3498db"
+        elif not color.startswith('#') or len(color) != 7:
+            self.print_warning("Неверный формат цвета, используется #3498db")
+            color = "#3498db"
+
+        # Настройки статуса
+        print("\nНастройки статуса:")
+
+        is_initial = input("Это начальный статус? (д/н) [н]: ").strip().lower()
+        is_initial = is_initial in ['д', 'да', 'y', 'yes']
+
+        is_final = input("Это конечный статус? (д/н) [н]: ").strip().lower()
+        is_final = is_final in ['д', 'да', 'y', 'yes']
+
+        requires_comment = input("Требовать комментарий при переходе? (д/н) [н]: ").strip().lower()
+        requires_comment = requires_comment in ['д', 'да', 'y', 'yes']
+
+        # Порядок сортировки
+        try:
+            order = input("Порядок сортировки (число) [0]: ").strip()
+            order = int(order) if order else 0
+        except ValueError:
+            order = 0
+
+        # Создание статуса
+        status = Status(
+            name=name,
+            code=code,
+            description=description,
+            color=color,
+            is_initial=is_initial,
+            is_final=is_final,
+            requires_comment=requires_comment,
+            order=order
+        )
+
+        try:
+            status_id = status_repo.create(status)
+            if status_id:
+                self.print_success(f"Статус '{name}' успешно создан (ID: {status_id})")
+            else:
+                self.print_error("Не удалось создать статус")
+        except Exception as e:
+            self.print_error(f"Ошибка при создании статуса: {e}")
+
+        input("\nНажмите Enter для продолжения...")
+
+    def edit_status(self):
+        """Редактирование статуса"""
+        self.clear_screen()
+        self.print_header("РЕДАКТИРОВАНИЕ СТАТУСА")
+
+        from repositories.status_repository import StatusRepository
+        status_repo = StatusRepository()
+
+        # Получаем все статусы для выбора
+        statuses = status_repo.find_all()
+
+        if not statuses:
+            self.print_warning("Нет статусов для редактирования")
+            input("\nНажмите Enter для продолжения...")
+            return
+
+        # Показываем список статусов
+        print("Доступные статусы:")
+        status_items = [(s.id, s.name, f"Код: {s.code}") for s in statuses]
+        selected_id = self.select_from_list(status_items, "Выберите статус для редактирования")
+
+        if not selected_id:
+            return
+
+        status = status_repo.find_by_id(selected_id)
+        if not status:
+            self.print_error("Статус не найден")
+            return
+
+        print("\nТекущие данные статуса:")
+        print(f"  Название: {status.name}")
+        print(f"  Код: {status.code}")
+        print(f"  Описание: {status.description or '-'}")
+        print(f"  Цвет: {status.color}")
+        print(f"  Начальный: {'Да' if status.is_initial else 'Нет'}")
+        print(f"  Конечный: {'Да' if status.is_final else 'Нет'}")
+        print(f"  Требует комментарий: {'Да' if status.requires_comment else 'Нет'}")
+        print(f"  Порядок: {status.order}")
+
+        print("\nВведите новые данные (Enter для сохранения текущего):")
+
+        # Редактирование названия
+        new_name = input(f"Название [{status.name}]: ").strip()
+        if new_name:
+            status.name = new_name
+
+        # Редактирование описания
+        new_description = input(f"Описание [{status.description or '-'}]: ").strip()
+        if new_description:
+            status.description = new_description
+        elif new_description == '' and status.description:
+            # Пустая строка - удаляем описание
+            status.description = None
+
+        # Редактирование цвета
+        new_color = input(f"Цвет [{status.color}]: ").strip()
+        if new_color:
+            if new_color.startswith('#') and len(new_color) == 7:
+                status.color = new_color
+            else:
+                self.print_warning("Неверный формат цвета, оставлен текущий")
+
+        # Редактирование настроек
+        print("\nНастройки статуса (Enter для сохранения текущего):")
+
+        is_initial = input(f"Начальный статус? (д/н) [{'д' if status.is_initial else 'н'}]: ").strip().lower()
+        if is_initial in ['д', 'да', 'y', 'yes']:
+            status.is_initial = True
+        elif is_initial in ['н', 'нет', 'n', 'no']:
+            status.is_initial = False
+
+        is_final = input(f"Конечный статус? (д/н) [{'д' if status.is_final else 'н'}]: ").strip().lower()
+        if is_final in ['д', 'да', 'y', 'yes']:
+            status.is_final = True
+        elif is_final in ['н', 'нет', 'n', 'no']:
+            status.is_final = False
+
+        requires_comment = input(f"Требовать комментарий? (д/н) [{'д' if status.requires_comment else 'н'}]: ").strip().lower()
+        if requires_comment in ['д', 'да', 'y', 'yes']:
+            status.requires_comment = True
+        elif requires_comment in ['н', 'нет', 'n', 'no']:
+            status.requires_comment = False
+
+        try:
+            new_order = input(f"Порядок [{status.order}]: ").strip()
+            if new_order:
+                status.order = int(new_order)
+        except ValueError:
+            self.print_warning("Неверный формат числа, оставлен текущий порядок")
+
+        # Сохранение
+        try:
+            if status_repo.update(status):
+                self.print_success(f"Статус '{status.name}' успешно обновлен")
+            else:
+                self.print_error("Не удалось обновить статус")
+        except Exception as e:
+            self.print_error(f"Ошибка при обновлении статуса: {e}")
+
+        input("\nНажмите Enter для продолжения...")
+
+    def delete_status(self):
+        """Удаление статуса"""
+        self.clear_screen()
+        self.print_header("УДАЛЕНИЕ СТАТУСА")
+
+        from repositories.status_repository import StatusRepository
+        from repositories.request_repository import RequestRepository
+        status_repo = StatusRepository()
+        request_repo = RequestRepository()
+
+        # Получаем все статусы
+        statuses = status_repo.find_all()
+
+        if not statuses:
+            self.print_warning("Нет статусов для удаления")
+            input("\nНажмите Enter для продолжения...")
+            return
+
+        # Показываем список статусов с количеством заявок
+        print("Доступные статусы:")
+        status_items = []
+        for s in statuses:
+            requests_count = len(request_repo.find_by_status(s.id))
+            status_items.append((s.id, s.name, f"Заявок: {requests_count}"))
+
+        selected_id = self.select_from_list(status_items, "Выберите статус для удаления")
+
+        if not selected_id:
+            return
+
+        status = status_repo.find_by_id(selected_id)
+        if not status:
+            self.print_error("Статус не найден")
+            return
+
+        # Проверяем, используется ли статус
+        requests_count = len(request_repo.find_by_status(status.id))
+
+        print(f"\nСтатус: {status.name} (ID: {status.id})")
+        print(f"Код: {status.code}")
+        print(f"Используется в {requests_count} заявках")
+
+        if requests_count > 0:
+            self.print_warning(f"Невозможно удалить статус, который используется в заявках!")
+            print("Сначала переназначьте статусы заявок или удалите заявки с этим статусом.")
+            input("\nНажмите Enter для продолжения...")
+            return
+
+        # Подтверждение удаления
+        confirm = input(f"\nВы уверены, что хотите удалить статус '{status.name}'? (д/н): ").strip().lower()
+
+        if confirm in ['д', 'да', 'y', 'yes']:
+            try:
+                if status_repo.delete(status.id):
+                    self.print_success(f"Статус '{status.name}' успешно удален")
+                else:
+                    self.print_error("Не удалось удалить статус")
+            except Exception as e:
+                self.print_error(f"Ошибка при удалении статуса: {e}")
+        else:
+            self.print_info("Удаление отменено")
+
+        input("\nНажмите Enter для продолжения...")
+
+    def configure_status_transitions(self):
+        """Настройка переходов между статусами"""
+        self.clear_screen()
+        self.print_header("НАСТРОЙКА ПЕРЕХОДОВ МЕЖДУ СТАТУСАМИ")
+
+        from repositories.status_repository import StatusRepository
+        status_repo = StatusRepository()
+
+        # Получаем все статусы
+        statuses = status_repo.find_all()
+
+        if len(statuses) < 2:
+            self.print_warning("Недостаточно статусов для настройки переходов")
+            input("\nНажмите Enter для продолжения...")
+            return
+
+        # Показываем текущие переходы
+        print("Текущие переходы:")
+        print("-" * 60)
+
+        for status in statuses:
+            next_statuses = status_repo.get_next_statuses(status.id)
+            if next_statuses:
+                next_names = [s.name for s in next_statuses]
+                print(f"{status.name} → {', '.join(next_names)}")
+            else:
+                print(f"{status.name} → (нет переходов)")
+
+        print("-" * 60)
+
+        print("\nВыберите действие:")
+        print("  1. Настроить переходы для статуса")
+        print("  2. Сбросить все переходы")
+        print("  0. Назад")
+
+        choice = input("\nВаш выбор: ").strip()
+
+        if choice == '1':
+            self._configure_single_status_transitions(statuses, status_repo)
+        elif choice == '2':
+            self._reset_all_transitions(statuses, status_repo)
+
+    def _configure_single_status_transitions(self, statuses, status_repo):
+        """Настройка переходов для конкретного статуса"""
+
+        # Выбор статуса
+        print("\nВыберите статус для настройки:")
+        status_items = [(s.id, s.name) for s in statuses]
+        selected_id = self.select_from_list(status_items, "Статус")
+
+        if not selected_id:
+            return
+
+        current_status = status_repo.find_by_id(selected_id)
+
+        # Получаем текущие следующие статусы
+        current_next = status_repo.get_next_statuses(current_status.id)
+        current_next_ids = [s.id for s in current_next]
+
+        print(f"\nНастройка переходов из статуса '{current_status.name}'")
+        print("Выберите статусы, в которые можно перейти (можно выбрать несколько):")
+
+        # Показываем все статусы для выбора
+        other_statuses = [s for s in statuses if s.id != current_status.id]
+
+        selected_ids = []
+        for status in other_statuses:
+            default = " [X]" if status.id in current_next_ids else " [ ]"
+            response = input(f"{default} {status.name} (д/н)? ").strip().lower()
+            if response in ['д', 'да', 'y', 'yes']:
+                selected_ids.append(status.id)
+
+        # Обновляем переходы
+        current_status.next_statuses = selected_ids
+
+        try:
+            if status_repo.update(current_status):
+                self.print_success(f"Переходы для статуса '{current_status.name}' обновлены")
+            else:
+                self.print_error("Не удалось обновить переходы")
+        except Exception as e:
+            self.print_error(f"Ошибка при обновлении переходов: {e}")
+
+        input("\nНажмите Enter для продолжения...")
+
+    def _reset_all_transitions(self, statuses, status_repo):
+        """Сброс всех переходов"""
+        confirm = input("\nВы уверены, что хотите сбросить все переходы? (д/н): ").strip().lower()
+
+        if confirm in ['д', 'да', 'y', 'yes']:
+            success = True
+            for status in statuses:
+                status.next_statuses = None
+                if not status_repo.update(status):
+                    success = False
+                    self.print_error(f"Не удалось сбросить переходы для статуса '{status.name}'")
+
+            if success:
+                self.print_success("Все переходы успешно сброшены")
+
+        input("\nНажмите Enter для продолжения...")
+
     def manage_categories(self):
         """Управление категориями"""
         self.clear_screen()
@@ -1364,6 +1797,101 @@ class CLIApp:
         elif choice == '3':
             self.toggle_category()
 
+    def edit_category(self):
+        """Редактирование категории"""
+        self.clear_screen()
+        self.print_header("РЕДАКТИРОВАНИЕ КАТЕГОРИИ")
+
+        from repositories.category_repository import CategoryRepository
+        category_repo = CategoryRepository()
+
+        # Получаем все категории
+        categories = category_repo.find_all()
+
+        if not categories:
+            self.print_warning("Нет категорий для редактирования")
+            input("\nНажмите Enter для продолжения...")
+            return
+
+        # Показываем список категорий
+        print("Доступные категории:")
+        cat_items = [(c.id, c.name, f"SLA: {c.sla_hours}ч") for c in categories]
+        selected_id = self.select_from_list(cat_items, "Выберите категорию для редактирования")
+
+        if not selected_id:
+            return
+
+        category = category_repo.find_by_id(selected_id)
+        if not category:
+            self.print_error("Категория не найдена")
+            return
+
+        print("\nТекущие данные категории:")
+        print(f"  Название: {category.name}")
+        print(f"  Описание: {category.description or '-'}")
+        print(f"  SLA лимит: {category.sla_hours} ч.")
+        print(f"  Родительская категория: {category.parent_id or '-'}")
+        print(f"  Активна: {'Да' if category.is_active else 'Нет'}")
+        print(f"  Цвет: {category.color}")
+
+        print("\nВведите новые данные (Enter для сохранения текущего):")
+
+        # Редактирование названия
+        new_name = input(f"Название [{category.name}]: ").strip()
+        if new_name:
+            category.name = new_name
+
+        # Редактирование описания
+        new_description = input(f"Описание [{category.description or '-'}]: ").strip()
+        if new_description:
+            category.description = new_description
+
+        # Редактирование SLA
+        try:
+            new_sla = input(f"SLA лимит [{category.sla_hours}]: ").strip()
+            if new_sla:
+                category.sla_hours = int(new_sla)
+        except ValueError:
+            self.print_warning("Неверный формат, оставлен текущий SLA")
+
+        # Редактирование родителя
+        all_categories = category_repo.find_all()
+        other_categories = [c for c in all_categories if c.id != category.id]
+
+        if other_categories:
+            print("\nВыберите нового родителя (Enter для текущего):")
+            cat_items = [(c.id, c.name) for c in other_categories]
+            cat_items.insert(0, (None, "Корневая категория"))
+            cat_items.insert(0, (category.parent_id, f"Текущий: {category.parent_id or 'Корневая'}"))
+
+            new_parent_id = self.select_from_list(cat_items, "Родитель")
+            if new_parent_id is not None:
+                category.parent_id = new_parent_id if new_parent_id != 0 else None
+
+        # Активность
+        active_input = input(f"Активна? (д/н) [{'д' if category.is_active else 'н'}]: ").strip().lower()
+        if active_input in ['д', 'да', 'y', 'yes']:
+            category.is_active = True
+        elif active_input in ['н', 'нет', 'n', 'no']:
+            category.is_active = False
+
+        # Цвет
+        new_color = input(f"Цвет [{category.color}]: ").strip()
+        if new_color:
+            category.color = new_color
+
+        # Сохранение
+        try:
+            if category_repo.update(category):
+                self.print_success(f"Категория '{category.name}' успешно обновлена")
+            else:
+                self.print_error("Не удалось обновить категорию")
+        except Exception as e:
+            self.print_error(f"Ошибка при обновлении категории: {e}")
+
+        input("\nНажмите Enter для продолжения...")
+
+
     def add_category(self):
         """Добавление новой категории"""
         print("\n--- Добавление категории ---")
@@ -1401,57 +1929,142 @@ class CLIApp:
     def show_statistics(self):
         """Отображение статистики и отчетов"""
         self.clear_screen()
-        self.print_header("Статистика и отчеты")
+        self.print_header("СТАТИСТИКА И ОТЧЕТЫ")
 
-        # Получаем статистику за разные периоды
-        stats_7d = self.request_service.get_statistics(days=7)
-        stats_30d = self.request_service.get_statistics(days=30)
-        stats_all = self.request_service.get_statistics()
+        print("Выберите период:")
+        print("  1. За 7 дней")
+        print("  2. За 30 дней")
+        print("  3. За 90 дней")
+        print("  4. Детальная статистика")
+        print("  5. Сравнение периодов")
+        print("  0. Назад")
 
-        print(
-            f"{Fore.CYAN if COLORS_AVAILABLE else ''}=== ОБЩАЯ СТАТИСТИКА ==={Style.RESET_ALL if COLORS_AVAILABLE else ''}")
-        print(f"Всего заявок: {stats_all['total']}")
-        print(f"Среднее время решения: {stats_all['avg_resolution_hours']:.1f} ч.")
+        choice = input("\nВаш выбор: ").strip()
 
-        print(
-            f"\n{Fore.CYAN if COLORS_AVAILABLE else ''}=== ЗА ПОСЛЕДНИЕ 30 ДНЕЙ ==={Style.RESET_ALL if COLORS_AVAILABLE else ''}")
-        print(f"Новых заявок: {stats_30d['total']}")
-        print("\nПо статусам:")
-        for status, count in stats_30d['by_status'].items():
-            print(f"  {status}: {count}")
-
-        print("\nПо приоритетам:")
-        for priority, count in stats_30d['by_priority'].items():
-            print(f"  {priority}: {count}")
-
-        print(
-            f"\n{Fore.CYAN if COLORS_AVAILABLE else ''}=== SLA СТАТИСТИКА ==={Style.RESET_ALL if COLORS_AVAILABLE else ''}")
-
-        # Статистика по соблюдению SLA
-        all_requests = self.request_service.get_all_requests()
-        total_with_sla = 0
-        compliant = 0
-
-        for req in all_requests:
-            if req.status_id in [3, 4]:  # Решена или закрыта
-                total_with_sla += 1
-                if self.sla_service.check_sla_compliance(req):
-                    compliant += 1
-
-        if total_with_sla > 0:
-            compliance_rate = (compliant / total_with_sla) * 100
-            print(f"SLA compliance: {compliance_rate:.1f}% ({compliant}/{total_with_sla})")
-
-        print(
-            f"\n{Fore.CYAN if COLORS_AVAILABLE else ''}=== АКТИВНОСТЬ ИСПОЛНИТЕЛЕЙ ==={Style.RESET_ALL if COLORS_AVAILABLE else ''}")
-
-        executors = self.user_repo.find_executors()
-        for executor in executors:
-            assigned = len(self.request_service.get_requests_by_assignee(executor.id))
-            resolved = len(self.request_service.get_resolved_requests_by_user(executor.id))
-            print(f"{executor.full_name}: в работе {assigned}, решено {resolved}")
+        if choice == '0':
+            return
+        elif choice == '1':
+            stats = self.statistics_service.get_statistics(days=7)
+            self._display_statistics(stats, "ЗА 7 ДНЕЙ")
+        elif choice == '2':
+            stats = self.statistics_service.get_statistics(days=30)
+            self._display_statistics(stats, "ЗА 30 ДНЕЙ")
+        elif choice == '3':
+            stats = self.statistics_service.get_statistics(days=90)
+            self._display_statistics(stats, "ЗА 90 ДНЕЙ")
+        elif choice == '4':
+            stats = self.statistics_service.get_detailed_statistics(days=30)
+            self._display_detailed_statistics(stats)
+        elif choice == '5':
+            stats = self.statistics_service.get_comparative_statistics(30, 7)
+            self._display_comparative_statistics(stats)
 
         input("\nНажмите Enter для продолжения...")
+
+    def _display_statistics(self, stats: Dict, period_title: str):
+        """Отображение общей статистики"""
+        if not stats:
+            self.print_warning("Нет данных для отображения")
+            return
+
+        print(f"\n{Fore.CYAN}=== СТАТИСТИКА {period_title} ==={Style.RESET_ALL}")
+        print(f"Всего заявок: {stats.get('total_requests', 0)}")
+        print(f"Решено: {stats.get('resolved_requests', 0)}")
+        print(f"Открыто: {stats.get('open_requests', 0)}")
+        print(f"Процент решения: {stats.get('resolution_rate', 0)}%")
+        print(f"Среднее время решения: {stats.get('avg_resolution_hours', 0)} ч.")
+
+        print(f"\n{Fore.CYAN}По статусам:{Style.RESET_ALL}")
+        for status, count in stats.get('by_status', {}).items():
+            print(f"  {status}: {count}")
+
+        print(f"\n{Fore.CYAN}По приоритетам:{Style.RESET_ALL}")
+        for priority, count in stats.get('by_priority', {}).items():
+            print(f"  {priority}: {count}")
+
+        print(f"\n{Fore.CYAN}SLA статистика:{Style.RESET_ALL}")
+        sla = stats.get('sla_stats', {})
+        print(f"  Соблюдено: {sla.get('compliant', 0)}")
+        print(f"  Нарушено: {sla.get('breached', 0)}")
+        print(f"  Процент соблюдения: {sla.get('compliance_rate', 0)}%")
+
+    def _display_detailed_statistics(self, stats: Dict):
+        """Отображение детальной статистики"""
+        if not stats:
+            self.print_warning("Нет данных для отображения")
+            return
+
+        print(f"\n{Fore.CYAN}=== ДЕТАЛЬНАЯ СТАТИСТИКА ==={Style.RESET_ALL}")
+        print(f"Всего заявок за период: {stats.get('total_requests', 0)}")
+
+        # Распределение по часам
+        hourly = stats.get('hourly_distribution', {})
+        if hourly:
+            print(f"\n{Fore.CYAN}Распределение по часам:{Style.RESET_ALL}")
+            for hour in range(24):
+                count = hourly.get(hour, 0)
+                if count > 0:
+                    bar = '█' * count
+                    print(f"  {hour:02d}:00 {bar} ({count})")
+
+        # Распределение по дням недели
+        weekly = stats.get('weekly_distribution', {})
+        if weekly:
+            print(f"\n{Fore.CYAN}Распределение по дням недели:{Style.RESET_ALL}")
+            for day, count in weekly.items():
+                print(f"  {day}: {count}")
+
+        # Топ создателей
+        users = stats.get('by_user_detail', {})
+        top_creators = users.get('top_creators', [])
+        if top_creators:
+            print(f"\n{Fore.CYAN}Топ создателей заявок:{Style.RESET_ALL}")
+            for creator in top_creators:
+                print(f"  {creator['user_name']}: {creator['requests_created']}")
+
+        # Топ исполнителей
+        top_assignees = users.get('top_assignees', [])
+        if top_assignees:
+            print(f"\n{Fore.CYAN}Топ исполнителей:{Style.RESET_ALL}")
+            for assignee in top_assignees:
+                print(f"  {assignee['user_name']}: {assignee['requests_assigned']}")
+
+    def _display_comparative_statistics(self, stats: Dict):
+        """Отображение сравнительной статистики"""
+        if not stats:
+            self.print_warning("Нет данных для отображения")
+            return
+
+        period1 = stats.get('period1', {})
+        period2 = stats.get('period2', {})
+        changes = stats.get('changes', {})
+
+        days1 = period1.get('days', 30)
+        days2 = period2.get('days', 7)
+        stats1 = period1.get('stats', {})
+        stats2 = period2.get('stats', {})
+
+        print(f"\n{Fore.CYAN}=== СРАВНЕНИЕ ПЕРИОДОВ ==={Style.RESET_ALL}")
+        print(f"\n{'Показатель':<30} {days1} дней   {days2} дней   Изменение")
+        print("-" * 70)
+
+        total1 = stats1.get('total_requests', 0)
+        total2 = stats2.get('total_requests', 0)
+        change = changes.get('total_requests_change', 0)
+        arrow = "↑" if change > 0 else "↓" if change < 0 else "→"
+        print(f"{'Всего заявок':<30} {total1:<8} {total2:<8} {arrow} {change}%")
+
+        rate1 = stats1.get('resolution_rate', 0)
+        rate2 = stats2.get('resolution_rate', 0)
+        change = changes.get('resolution_rate_change', 0)
+        arrow = "↑" if change > 0 else "↓" if change < 0 else "→"
+        print(f"{'Процент решения':<30} {rate1:<8}% {rate2:<8}% {arrow} {change}%")
+
+        time1 = stats1.get('avg_resolution_hours', 0)
+        time2 = stats2.get('avg_resolution_hours', 0)
+        change = changes.get('avg_resolution_change', 0)
+        arrow = "↓" if change < 0 else "↑" if change > 0 else "→"
+        print(f"{'Ср. время решения':<30} {time1:<8}ч {time2:<8}ч {arrow} {abs(change)}%")
 
     def search_requests(self):
         """Поиск заявок по различным критериям"""

@@ -111,8 +111,13 @@ class DatabaseManager:
 
 if __name__ == "__main__":
     if not os.path.exists(Config.DATABASE_PATH):
-        db_manager = DatabaseManager()
         print("База данных создана")
     else:
         print("База данных уже существует")
 
+    db_manager = DatabaseManager()
+    # Проверяем, что таблица users существует
+    users = db_manager.execute_query("SELECT * FROM users")
+    print(f"{users}")
+    # # Добавляем админа по умолчанию
+    # db_manager.execute_insert("INSERT INTO users (username, password) VALUES (?, ?)", ("admin", "adminpass"))
